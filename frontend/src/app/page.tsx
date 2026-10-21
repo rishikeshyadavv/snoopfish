@@ -114,6 +114,10 @@ export default function SnoopFishHome() {
   const [error, setError] = useState<string | null>(null);
   const [isMonitorExpanded, setIsMonitorExpanded] = useState(false);
 
+  // Progressive investigation radar & latency counter
+  const [investigationStep, setInvestigationStep] = useState<number>(1);
+  const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
+
   // Drawer state for Past Audits
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [pastAudits, setPastAudits] = useState<PastAudit[]>([]);
@@ -123,6 +127,37 @@ export default function SnoopFishHome() {
 
   const apiBase =
     process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+  // Elapsed time counter
+  useEffect(() => {
+    let interval: NodeJS.Timeout | null = null;
+    if (isAuditing) {
+      interval = setInterval(() => {
+        setElapsedSeconds((prev) => prev + 1);
+      }, 1000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [isAuditing]);
+
+  // Progressive pacing fallback
+  useEffect(() => {
+    if (!isAuditing) return;
+    if (elapsedSeconds >= 9) {
+      setInvestigationStep((prev) => Math.max(prev, 4));
+    } else if (elapsedSeconds >= 6) {
+      setInvestigationStep((prev) => Math.max(prev, 3));
+    } else if (elapsedSeconds >= 3) {
+      setInvestigationStep((prev) => Math.max(prev, 2));
+    }
+  }, [elapsedSeconds, isAuditing]);
+
+  const formatTime = (totalSeconds: number) => {
+    const mins = Math.floor(totalSeconds / 60);
+    const secs = totalSeconds % 60;
+    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}s`;
+  };
 
   const fetchPastAudits = async () => {
     setLoadingHistory(false);
@@ -148,30 +183,35 @@ export default function SnoopFishHome() {
     const demoFeedUrl = `/demo-feed/${key}`;
 
     setStreamingUrl(demoFeedUrl);
+    setInvestigationStep(1);
     setLogs((prev) => [
       ...prev,
       `[SIMULATION] Starting offline demo feed: ${demoFeedUrl}`,
     ]);
 
     await new Promise((r) => setTimeout(r, 600));
+    setInvestigationStep(1);
     setLogs((prev) => [
       ...prev,
       `[WHOIS] Querying registrar DNS & domain age (${demoPayload.audit.domain_age_days} days)...`,
     ]);
 
     await new Promise((r) => setTimeout(r, 700));
+    setInvestigationStep(2);
     setLogs((prev) => [
       ...prev,
       `[MCA] Searching public corporate registry & director DINs...`,
     ]);
 
     await new Promise((r) => setTimeout(r, 700));
+    setInvestigationStep(3);
     setLogs((prev) => [
       ...prev,
       `[THREAT_INTEL] Scanning scam boards, blacklist DBs & forums...`,
     ]);
 
     await new Promise((r) => setTimeout(r, 500));
+    setInvestigationStep(4);
     setReport(demoPayload);
     setLogs((prev) => [
       ...prev,
@@ -186,6 +226,8 @@ export default function SnoopFishHome() {
     setIsAuditing(true);
     setReport(null);
     setError(null);
+    setInvestigationStep(1);
+    setElapsedSeconds(0);
 
     // Cue up immediate simulated demo feed URL if in demo mode
     if (isDemoMode) {
@@ -290,6 +332,21 @@ export default function SnoopFishHome() {
     try {
       const payload = JSON.parse(dataStr);
 
+      // Radar step advancement from SSE payload
+      if (payload.step && typeof payload.step === "number") {
+        setInvestigationStep((prev) => Math.max(prev, payload.step));
+      }
+      const rawText = `${event} ${dataStr}`.toLowerCase();
+      if (rawText.includes("whois") || rawText.includes("dns") || rawText.includes("registrar")) {
+        setInvestigationStep((prev) => Math.max(prev, 1));
+      }
+      if (rawText.includes("mca") || rawText.includes("corporate") || rawText.includes("registry") || rawText.includes("director")) {
+        setInvestigationStep((prev) => Math.max(prev, 2));
+      }
+      if (rawText.includes("scam") || rawText.includes("threat") || rawText.includes("forum") || rawText.includes("reddit") || rawText.includes("blacklist")) {
+        setInvestigationStep((prev) => Math.max(prev, 3));
+      }
+
       if (event === "streaming_url" || payload.streaming_url) {
         const url = payload.streaming_url || payload.url;
         if (url) {
@@ -300,6 +357,7 @@ export default function SnoopFishHome() {
           ]);
         }
       } else if (event === "result" || (payload.trust_score !== undefined && payload.audit)) {
+        setInvestigationStep(4);
         setReport(payload as ScoreReport);
         setLogs((prev) => [
           ...prev,
@@ -536,6 +594,12 @@ ${report.audit.summary}
               <span>Live Investigation Command Center</span>
             </h2>
             <div className="flex items-center space-x-2">
+              {isAuditing && (
+                <span className="text-xs font-black uppercase px-3 py-1 rounded-full bg-neo-orange border-2 border-neo-black shadow-neo flex items-center space-x-1 animate-pulse">
+                  <span>⏱️</span>
+                  <span>{formatTime(elapsedSeconds)}</span>
+                </span>
+              )}
               <span className="text-xs font-black uppercase px-3 py-1 rounded-full bg-neo-cream border-2 border-neo-black shadow-neo">
                 {isAuditing ? "⚡ Audit in progress" : report ? "✓ Audit complete" : "💤 Standby"}
               </span>
@@ -658,7 +722,7 @@ ${report.audit.summary}
               </div>
             </div>
 
-            {/* Right Card: Forensic Dossier */}
+            {/* Right Card: Forensic Dossier / Progressive Radar */}
             <div className="lg:col-span-5 flex flex-col space-y-4">
               <div className="bg-neo-cream rounded-3xl border-[3px] border-neo-black shadow-neo-lg p-5">
                 <div className="flex items-center justify-between pb-3 border-b-2 border-neo-black mb-4">
@@ -810,7 +874,189 @@ ${report.audit.summary}
                       </p>
                     </div>
                   </div>
+                ) : isAuditing ? (
+                  /* PROGRESSIVE 4-STEP INVESTIGATION RADAR */
+                  <div className="space-y-4">
+                    {/* Radar Progress Header */}
+                    <div className="p-4 rounded-2xl border-[3px] border-neo-black shadow-neo bg-neo-yellow text-neo-black">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center space-x-2">
+                          <span className="w-2.5 h-2.5 rounded-full bg-neo-black animate-ping"></span>
+                          <span className="text-xs font-black uppercase tracking-wider">
+                            Live Forensic Radar Active
+                          </span>
+                        </div>
+                        <span className="text-xs font-mono font-black bg-white px-2 py-0.5 rounded-full border border-neo-black">
+                          Step {investigationStep} of 4
+                        </span>
+                      </div>
+
+                      <div className="w-full bg-white rounded-full h-3 border-2 border-neo-black overflow-hidden p-0.5">
+                        <div
+                          className="bg-neo-orange h-full rounded-full transition-all duration-500"
+                          style={{ width: `${Math.min(100, Math.max(15, (investigationStep / 4) * 100))}%` }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Step Cards */}
+                    <div className="space-y-2.5">
+                      {/* Step 1: DNS & Registrar */}
+                      <div
+                        className={`p-3.5 rounded-2xl border-2 border-neo-black transition-all ${
+                          investigationStep > 1
+                            ? "bg-emerald-50 border-emerald-700"
+                            : investigationStep === 1
+                            ? "bg-white shadow-neo border-neo-black"
+                            : "bg-neutral-100 opacity-60"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-2.5">
+                            <span className="text-lg">🌐</span>
+                            <div>
+                              <h4 className="text-xs font-black uppercase tracking-tight text-neo-black">
+                                Step 1: Resolving DNS & Registrar Integrity
+                              </h4>
+                              <p className="text-[11px] font-bold text-neutral-500">
+                                Evaluating domain creation age and WHOIS ownership shield
+                              </p>
+                            </div>
+                          </div>
+                          <div>
+                            {investigationStep > 1 ? (
+                              <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full bg-neo-mint border border-neo-black text-[10px] font-black uppercase text-emerald-950">
+                                <CheckCircle2 className="w-3 h-3" />
+                                <span>Verified</span>
+                              </span>
+                            ) : investigationStep === 1 ? (
+                              <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full bg-neo-orange border border-neo-black text-[10px] font-black uppercase text-neo-black animate-pulse">
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                                <span>Sweeping</span>
+                              </span>
+                            ) : (
+                              <span className="text-[10px] font-bold text-neutral-400 uppercase">Pending</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Step 2: Corporate Registries */}
+                      <div
+                        className={`p-3.5 rounded-2xl border-2 border-neo-black transition-all ${
+                          investigationStep > 2
+                            ? "bg-emerald-50 border-emerald-700"
+                            : investigationStep === 2
+                            ? "bg-white shadow-neo border-neo-black"
+                            : "bg-neutral-100 opacity-60"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-2.5">
+                            <span className="text-lg">🏛️</span>
+                            <div>
+                              <h4 className="text-xs font-black uppercase tracking-tight text-neo-black">
+                                Step 2: Querying Corporate & Director Registries
+                              </h4>
+                              <p className="text-[11px] font-bold text-neutral-500">
+                                Crawling MCA / SEC filings, DIN registration, and legal standing
+                              </p>
+                            </div>
+                          </div>
+                          <div>
+                            {investigationStep > 2 ? (
+                              <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full bg-neo-mint border border-neo-black text-[10px] font-black uppercase text-emerald-950">
+                                <CheckCircle2 className="w-3 h-3" />
+                                <span>Verified</span>
+                              </span>
+                            ) : investigationStep === 2 ? (
+                              <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full bg-neo-orange border border-neo-black text-[10px] font-black uppercase text-neo-black animate-pulse">
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                                <span>Querying</span>
+                              </span>
+                            ) : (
+                              <span className="text-[10px] font-bold text-neutral-400 uppercase">Pending</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Step 3: Threat Intel & Blacklists */}
+                      <div
+                        className={`p-3.5 rounded-2xl border-2 border-neo-black transition-all ${
+                          investigationStep > 3
+                            ? "bg-emerald-50 border-emerald-700"
+                            : investigationStep === 3
+                            ? "bg-white shadow-neo border-neo-black"
+                            : "bg-neutral-100 opacity-60"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-2.5">
+                            <span className="text-lg">🛡️</span>
+                            <div>
+                              <h4 className="text-xs font-black uppercase tracking-tight text-neo-black">
+                                Step 3: Sweeping Consumer Threat Intel & Blacklists
+                              </h4>
+                              <p className="text-[11px] font-bold text-neutral-500">
+                                Scanning r/Scams, BBB, Trustpilot, and courier fraud archives
+                              </p>
+                            </div>
+                          </div>
+                          <div>
+                            {investigationStep > 3 ? (
+                              <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full bg-neo-mint border border-neo-black text-[10px] font-black uppercase text-emerald-950">
+                                <CheckCircle2 className="w-3 h-3" />
+                                <span>Verified</span>
+                              </span>
+                            ) : investigationStep === 3 ? (
+                              <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full bg-neo-orange border border-neo-black text-[10px] font-black uppercase text-neo-black animate-pulse">
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                                <span>Scanning</span>
+                              </span>
+                            ) : (
+                              <span className="text-[10px] font-bold text-neutral-400 uppercase">Pending</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Step 4: Synthesizing Forensic Dossier */}
+                      <div
+                        className={`p-3.5 rounded-2xl border-2 border-neo-black transition-all ${
+                          investigationStep >= 4
+                            ? "bg-white shadow-neo border-neo-black"
+                            : "bg-neutral-100 opacity-60"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-2.5">
+                            <span className="text-lg">⚡</span>
+                            <div>
+                              <h4 className="text-xs font-black uppercase tracking-tight text-neo-black">
+                                Step 4: Synthesizing Forensic Dossier
+                              </h4>
+                              <p className="text-[11px] font-bold text-neutral-500">
+                                Compiling composite risk score and deterministic trust verdict
+                              </p>
+                            </div>
+                          </div>
+                          <div>
+                            {investigationStep >= 4 ? (
+                              <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full bg-neo-mint border border-neo-black text-[10px] font-black uppercase text-emerald-950 animate-pulse">
+                                <Sparkles className="w-3 h-3" />
+                                <span>Compiling</span>
+                              </span>
+                            ) : (
+                              <span className="text-[10px] font-bold text-neutral-400 uppercase">Pending</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 ) : (
+                  /* IDLE STANDBY STATE */
                   <div className="py-20 text-center flex flex-col items-center justify-center space-y-3">
                     <Building2 className="w-14 h-14 text-neutral-300" />
                     <p className="font-black text-sm uppercase text-neo-black">

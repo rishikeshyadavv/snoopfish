@@ -23,12 +23,14 @@ class TinyFishClient:
     def build_goal_prompt(self, target_name: str, target_url: Optional[str] = None) -> str:
         url_context = f" Target URL: {target_url}." if target_url else ""
         return (
-            f"Perform a forensic background audit on the entity '{target_name}'.{url_context} "
-            f"1. Perform a WHOIS lookup or domain registry inspection to determine domain age in days. "
-            f"2. Search public corporate registries (MCA, SEC, Companies House, or state databases) to verify "
-            f"legal business registration and discover active registered directors/officers. "
-            f"3. Scan scam warning forums, BBB, Trustpilot, and community boards for fraud alerts or red flags. "
-            f"4. Compile your findings strictly according to the specified JSON schema."
+            f"Perform a rapid, focused forensic background audit on '{target_name}'.{url_context} "
+            f"EXECUTION LIMITS: Strictly limit your session to a maximum of 3 direct queries and no more "
+            f"than 4 page navigations: "
+            f"1. Query domain creation date and registrar via WHOIS tools to calculate domain_age_days. "
+            f"2. Check official corporate registration status (CIN, legal status) on public registry portals. "
+            f"3. Run a focused fraud/scam keyword search on consumer complaint databases and discussion boards. "
+            f"Avoid deeply crawling secondary news links or general blog articles. Synthesize the output JSON "
+            f"immediately once primary signals are captured."
         )
 
     def _headers(self) -> Dict[str, str]:
